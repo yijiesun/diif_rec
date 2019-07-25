@@ -11,6 +11,7 @@
 #include<vector>
 #include<stdexcept>
 #define IPUT_AVI 1
+#define SAVE_AVI 1
 #define EXTEND_PIXEL 5
 #define SMALL_CONTOR_SIZE_NEED_CLEAR 500
 #define OVER_PERCENT 0.0001f
@@ -31,6 +32,7 @@ int IMG_WID, IMG_HGT;
 
 int main(int argc, char* argv[])
 {
+
 #if IPUT_AVI
 	//打开视频文件
 	VideoCapture capture("test.avi");
@@ -54,6 +56,7 @@ int main(int argc, char* argv[])
 	capture.set(CV_CAP_PROP_FRAME_WIDTH, 640);
 	capture.set(CV_CAP_PROP_FRAME_HEIGHT, 480);
 #endif
+
 	cv::namedWindow("image");
 	cv::Mat src, src_gray, cv_image_bgr, bk, bk_gray;
 	cv::Mat diff1,diff2,diff3;
@@ -74,6 +77,12 @@ int main(int argc, char* argv[])
 	string txt1 = "small";
 	string txt2 = "combine";
 	string txt3 = "needclear";
+#if SAVE_AVI
+	string outputVideoPath = "..\\result.avi";
+	Size sWH = Size(2*IMG_WID, IMG_HGT);
+	VideoWriter outputVideo;
+	outputVideo.open(outputVideoPath, CV_FOURCC('M', 'P', '4', '2'), 25.0, sWH);
+#endif
 	while (true)
 	{
 		cout << position++ << endl;
@@ -125,14 +134,20 @@ int main(int argc, char* argv[])
 		hconcat(resultImg, diff2c, combine);
 
 		imshow("image", combine);
-		//
-		//bool key = keyEvent(src_gray, diff1, contours, hierarcy);
-		//if(key)
-		//	return 0;
+#if SAVE_AVI
+		outputVideo << combine;
+#endif
+		
+		bool key = keyEvent(src_gray, diff1, contours, hierarcy);
+		if(key)
+			break;
 
 		waitKey(30);
 	}
 	capture.release();
+#if SAVE_AVI
+	outputVideo.release();
+#endif
 	return 0;
 }
 
@@ -370,10 +385,9 @@ bool keyEvent(Mat & img, Mat & diff, vector<vector<Point>> &cont, vector<Vec4i> 
 			imwrite("contours.png", dstImage);
 			imwrite("allrec.png", dstImage1);
 		}
-		else if (ch == 27)
-			return 1;
-		return 0;
+		if (ch == 27)
+			return true;
 	}
-
+	return false;
 }
 #endif
