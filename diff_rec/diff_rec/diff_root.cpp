@@ -1,4 +1,5 @@
 #if 1
+#include <fstream>
 #include <conio.h>
 #include <iostream>
 #include <sstream>
@@ -12,12 +13,13 @@
 #include<stdexcept>
 #define IPUT_AVI 1
 #define SAVE_AVI 1
-#define EXTEND_PIXEL 5
-#define SMALL_CONTOR_SIZE_NEED_CLEAR 500
+#define EXTEND_PIXEL 20
+#define SMALL_CONTOR_SIZE_NEED_CLEAR 200
 #define OVER_PERCENT 0.0001f
-#define INSIDE_DILATE_WIN_SIZE 50
+#define INSIDE_DILATE_WIN_SIZE 10
 #define IDWS_SCALE 1
 #define NORMAL_DIFF 0.1f
+#define CLEAR_BIG_THAN_THIS_HAMMING_RADIO 0.8f  //匹配矩形进行汉明距离计算，距离大于BK的该倍视为误匹配
 using namespace cv;
 using namespace std;
 float DecideOverlap(const Rect &r1, const Rect &r2, Rect &r3);
@@ -26,13 +28,18 @@ void mergeRecs(vector<Rect> &rects, float percent);
 void paddingRecs(vector<Rect> &rects, int size);
 void insideDilate(Mat & bimg, Mat & bout, int win_size,int scale);
 void normalDiff(vector<Rect> &rects, Mat & bk, Mat & src);
+void hammingClear(vector<Rect> &rects, Mat & bk, Mat & src);
+void hammingBiImgClear(vector<Rect> &rects, Mat & bk, Mat & src, Mat & diff);
 void drawRecs(Mat & img, vector<Rect> &rects, const Scalar& color, string &txt);
 bool keyEvent(Mat & img,  Mat & diff, vector<vector<Point>> &cont, vector<Vec4i> &h);
+void writeMatToFile(cv::Mat& m, const char* filename);
+void svm_hog_detector(vector<Rect> &rects, Mat & src);
 int IMG_WID, IMG_HGT;
-
+Mat resultImg;
+double position;
+Mat aa;
 int main(int argc, char* argv[])
 {
-
 #if IPUT_AVI
 	//打开视频文件
 	VideoCapture capture("test.avi");
@@ -42,7 +49,7 @@ int main(int argc, char* argv[])
 		cout << "Movie open Error" << endl;
 		return -1;
 	}
-	double position = 70;
+	position = 0;
 	//设置播放到哪一帧，这里设置为第0帧
 	capture.set(CV_CAP_PROP_POS_FRAMES, position);
 #else
@@ -60,8 +67,7 @@ int main(int argc, char* argv[])
 	cv::namedWindow("image");
 	cv::Mat src, src_gray, cv_image_bgr, bk, bk_gray;
 	cv::Mat diff1,diff2,diff3;
-
-	Mat resultImg = Mat(src.rows, src.cols, CV_8UC3);
+	resultImg = Mat(src.rows, src.cols, CV_8UC3);
 	Mat combine = Mat(src.rows, 2*src.cols, CV_8UC3);
 	
 	Mat pDes, kernel, kernel1, combine1;
@@ -70,19 +76,24 @@ int main(int argc, char* argv[])
 
 	cv::cvtColor(bk, bk_gray, CV_BGR2GRAY);
 	//equalizeHist(bk_gray, bk_gray);
-
+	imwrite("bk.png", bk_gray);
 	IMG_WID = bk_gray.size().width;
 	IMG_HGT = bk_gray.size().height;
 
 	string txt1 = "small";
 	string txt2 = "combine";
-	string txt3 = "needclear";
+	string txt3 = "hammingclear";
 #if SAVE_AVI
-	string outputVideoPath = "..\\result.avi";
-	Size sWH = Size(2*IMG_WID, IMG_HGT);
+	string outputVideoPath = "..\\result_temp.avi";
+	//Size sWH = Size(2*IMG_WID, IMG_HGT);
+	Size sWH = Size(IMG_WID, IMG_HGT);
 	VideoWriter outputVideo;
 	outputVideo.open(outputVideoPath, CV_FOURCC('M', 'P', '4', '2'), 25.0, sWH);
 #endif
+
+	position = 0;//555 649
+	//设置播放到哪一帧，这里设置为第0帧
+	capture.set(CV_CAP_PROP_POS_FRAMES, position);
 	while (true)
 	{
 		cout << position++ << endl;
@@ -108,34 +119,41 @@ int main(int argc, char* argv[])
 		//morphologyEx(diff, diff, MORPH_DILATE, kernel1); //膨胀
 
 		threshold(diff, diff, 50, 255, CV_THRESH_BINARY);
-
-		Mat diff_inside = diff.clone();
+		//imwrite("649diff.bmp", diff);
+		//Mat diff_inside = diff.clone();
 		diff2 = diff.clone();
-		insideDilate(diff, diff_inside,INSIDE_DILATE_WIN_SIZE,IDWS_SCALE);
-		diff1 = diff_inside.clone();
-
+		//insideDilate(diff, diff_inside,INSIDE_DILATE_WIN_SIZE,IDWS_SCALE);
+		//diff1 = diff_inside.clone();
+		//imwrite("649diff_inside.bmp", diff_inside);
 		vector<vector<Point>> contours;
 		vector<Vec4i> hierarcy;
-		findContours(diff_inside, contours, hierarcy, CV_RETR_EXTERNAL, CHAIN_APPROX_NONE); //查找轮廓
+		findContours(diff2, contours, hierarcy, CV_RETR_EXTERNAL, CHAIN_APPROX_NONE); //查找轮廓
 		vector<Rect> boundRect; //定义外接矩形集合
 
 		int rec_nums = buildAndClearSmallContors(contours, boundRect, SMALL_CONTOR_SIZE_NEED_CLEAR);
-		//paddingRecs(boundRect, EXTEND_PIXEL);
-		drawRecs(resultImg, boundRect, Scalar(0, 255, 0, 0),txt1);
-
+		paddingRecs(boundRect, EXTEND_PIXEL);
+		//drawRecs(resultImg, boundRect, Scalar(0, 255, 0, 0),txt1);
+		hammingBiImgClear(boundRect, bk_gray, src_gray, diff);
+		paddingRecs(boundRect, EXTEND_PIXEL);
 		mergeRecs(boundRect,OVER_PERCENT);
 		mergeRecs(boundRect, OVER_PERCENT);
-		drawRecs(resultImg, boundRect, Scalar(255, 0, 0, 0), txt3);
-		normalDiff(boundRect, bk_gray, src_gray);
-		drawRecs(resultImg, boundRect, Scalar(0, 0, 255, 0), txt2);
+		drawRecs(resultImg, boundRect, Scalar(0, 255, 0, 0), txt3);
+		
+		//svm_hog_detector(boundRect, src_gray);
+		imshow("image", resultImg);
 
+		//normalDiff(boundRect, bk_gray, src_gray);
+		//drawRecs(resultImg, boundRect, Scalar(0, 0, 255, 0), txt2);
+#if 0
 		Mat diff2c = Mat(resultImg.rows, resultImg.cols, CV_8UC3);
 		cvtColor(diff1, diff2c, CV_GRAY2BGR);
 		hconcat(resultImg, diff2c, combine);
 
 		imshow("image", combine);
+#endif
 #if SAVE_AVI
-		outputVideo << combine;
+		//outputVideo << combine;
+		outputVideo << resultImg;
 #endif
 		
 		bool key = keyEvent(src_gray, diff1, contours, hierarcy);
@@ -214,8 +232,8 @@ void paddingRecs(vector<Rect> &rects, int size)
 	{
 		rects[i].x = min(max(rects[i].x - EXTEND_PIXEL, 0), IMG_WID);
 		rects[i].y = min(max(rects[i].y - EXTEND_PIXEL, 0), IMG_HGT);
-		rects[i].width = rects[i].x + rects[i].width + EXTEND_PIXEL > IMG_WID ? IMG_WID - rects[i].x : rects[i].width + EXTEND_PIXEL;
-		rects[i].height = rects[i].y + rects[i].height + EXTEND_PIXEL > IMG_HGT ? IMG_HGT - rects[i].y : rects[i].height + EXTEND_PIXEL;
+		rects[i].width = rects[i].x + rects[i].width + 2 * EXTEND_PIXEL > IMG_WID ? IMG_WID - rects[i].x : rects[i].width + 2 * EXTEND_PIXEL;
+		rects[i].height = rects[i].y + rects[i].height + 2 * EXTEND_PIXEL > IMG_HGT ? IMG_HGT - rects[i].y : rects[i].height + 2 * EXTEND_PIXEL;
 	}
 }
 
@@ -299,12 +317,15 @@ void normalDiff(vector<Rect> &rects, Mat & bk, Mat & src)
 	int x0 = 0, y0 = 0, w0 = 0, h0 = 0;
 	for (int i = 0; i< rects.size(); i++)
 	{
+		if ( i < 0 || i >= rects.size())
+			break;
+
 		x0 = rects[i].x;  //获得第i个外接矩形的左上角的x坐标
 		y0 = rects[i].y; //获得第i个外接矩形的左上角的y坐标
 		w0 = rects[i].width; //获得第i个外接矩形的宽度
 		h0 = rects[i].height; //获得第i个外接矩形的高度
-		if (w0*h0 > SMALL_CONTOR_SIZE_NEED_CLEAR * 2)
-			continue;
+		//if (w0*h0 > SMALL_CONTOR_SIZE_NEED_CLEAR * 2)
+		//	continue;
 		Mat bk_roi(bk, Rect(x0, y0, w0, h0));
 		Mat src_roi(src, Rect(x0, y0, w0, h0));
 		Mat equal_src,equal_bk;
@@ -322,7 +343,163 @@ void normalDiff(vector<Rect> &rects, Mat & bk, Mat & src)
 		}
 	}
 }
+void hammingClear(vector<Rect> &rects, Mat & bk, Mat & src)
+{
+	int x0 = 0, y0 = 0, w0 = 0, h0 = 0;
+	for (int i = 0; i< rects.size(); i++)
+	{
+		if (i < 0 || i >= rects.size())
+			break;
+		x0 = rects[i].x;  //获得第i个外接矩形的左上角的x坐标
+		y0 = rects[i].y; //获得第i个外接矩形的左上角的y坐标
+		w0 = rects[i].width; //获得第i个外接矩形的宽度
+		h0 = rects[i].height; //获得第i个外接矩形的高度
+		//if (w0*h0 > SMALL_CONTOR_SIZE_NEED_CLEAR * 2)
+		//	continue;
+		cv::Mat bk_roi = bk(cv::Rect(x0, y0, w0, h0));
+		cv::Mat src_roi = src(cv::Rect(x0, y0, w0, h0));
 
+		Mat bk_comp, src_comp;
+
+		//imwrite("roi.bmp", bk_roi);
+		//bk_roi = imread("roi.bmp",0);
+		//imwrite("roi.bmp", src_roi);
+		//src_roi = imread("roi.bmp", 0);
+
+		Scalar bk_sum = sum(bk_roi);
+		int bk_avg = cvRound(bk_sum.val[0] / (double)(w0*h0));
+		Mat bk_mask = Mat::ones(Size(w0, h0), CV_8UC1);
+		bk_mask *= bk_avg;
+		compare(bk_roi, bk_mask, bk_comp, CMP_GE);
+		//bk_comp /= 255;
+
+		Scalar src_sum = sum(src_roi);
+		int src_avg = cvRound(src_sum.val[0] / (double)(w0*h0));
+		Mat src_mask = Mat::ones(Size(w0, h0), CV_8UC1);
+		src_mask *= src_avg;
+		compare(src_roi, src_mask, src_comp, CMP_GE);
+		//src_comp /= 255;
+
+		Mat src_bk_comp = Mat::ones(Size(w0, h0), CV_8UC1);
+		compare(bk_comp, src_comp, src_bk_comp, CMP_EQ);
+		src_bk_comp /= 255;
+
+		int hammingDist = countNonZero(src_bk_comp);
+		double radio = hammingDist / (double)(w0*h0);
+		if(radio > CLEAR_BIG_THAN_THIS_HAMMING_RADIO )
+		{
+			rects.erase(rects.begin() + i);
+			i--;
+			rectangle(resultImg, Point(x0, y0), Point(x0 + w0, y0 + h0), Scalar(255, 0, 0), 1, 8); //绘制第i个外接矩形
+			std::stringstream ss;
+			ss <<"bad:" <<position <<","<< radio;
+			std::string s = ss.str();
+			putText(resultImg, s.c_str(), Point(x0, y0+5), FONT_HERSHEY_PLAIN, 1.0, Scalar(0, 0, 255), 1);
+		}
+		else
+		{
+			rectangle(resultImg, Point(x0, y0), Point(x0 + w0, y0 + h0), Scalar(0, 255, 0), 1, 8); //绘制第i个外接矩形
+			std::stringstream ss;
+			ss << "good:" << position << "," << radio;
+			std::string s = ss.str();
+			putText(resultImg, s.c_str(), Point(x0, y0 + 5), FONT_HERSHEY_PLAIN, 1.0, Scalar(0, 0, 255), 1);
+		}
+
+	}
+}
+
+void hammingBiImgClear(vector<Rect> &rects, Mat & bk, Mat & src, Mat & diff)
+{
+	int x0 = 0, y0 = 0, w0 = 0, h0 = 0;
+	for (int i = 0; i< rects.size(); i++)
+	{
+		if (i < 0 || i >= rects.size())
+			break;
+		x0 = rects[i].x;  //获得第i个外接矩形的左上角的x坐标
+		y0 = rects[i].y; //获得第i个外接矩形的左上角的y坐标
+		w0 = rects[i].width; //获得第i个外接矩形的宽度
+		h0 = rects[i].height; //获得第i个外接矩形的高度
+
+		Mat StandardDeviationSrcRoi,src_mean,src_sd, bk_roi_255; // 用于统计src roi二值化遮罩里面的标准差
+		Mat bk_comp, src_comp, binary_roi_mask_turn, binary_roi_mask_turn255;
+		Mat roi_ones = Mat::ones(Size(w0, h0), CV_8UC1);
+		Mat bk_mask = Mat::ones(Size(w0, h0), CV_8UC1);
+		Mat src_mask = Mat::ones(Size(w0, h0), CV_8UC1);
+
+		cv::Mat bk_roi = bk(cv::Rect(x0, y0, w0, h0)).clone();
+		cv::Mat src_roi = src(cv::Rect(x0, y0, w0, h0)).clone();
+		cv::Mat binary_roi_mask = diff(cv::Rect(x0, y0, w0, h0)).clone();//存放src二值图对应roi
+		binary_roi_mask /= 255;//二值图遮罩
+		compare(binary_roi_mask, roi_ones, binary_roi_mask_turn255, CMP_NE);
+		binary_roi_mask_turn = binary_roi_mask_turn255/255;//01反转的二值图遮罩
+		int maskArea = countNonZero(binary_roi_mask);
+
+		imwrite("649src_roi.bmp", src_roi);
+
+		bk_roi = bk_roi.mul(binary_roi_mask);  //套上mask
+		Scalar bk_sum = sum(bk_roi);
+		int bk_avg = cvRound(bk_sum.val[0] / (double)maskArea);
+		bk_mask *= bk_avg;
+		
+		bk_roi_255 = bk_roi + binary_roi_mask_turn255; // bk_roi_255的二值图遮罩外面都是255
+		compare(bk_roi_255, bk_mask, bk_comp, CMP_GE);// bk_comp的二值图遮罩外面都是1
+
+		src_roi = src_roi.mul(binary_roi_mask); //src_roi的二值图遮罩外面都是0
+		Scalar src_sum = sum(src_roi);
+		int src_avg = cvRound(src_sum.val[0] / (double)maskArea);
+		src_mask *= src_avg;
+		compare(src_roi, src_mask, src_comp, CMP_GE); // src_comp的二值图遮罩外面都是0
+
+		StandardDeviationSrcRoi = src_mask.mul(binary_roi_mask_turn);//遮罩外面都存放着src_roi的均值，这样可以不计入标准差的计算
+		StandardDeviationSrcRoi += src_roi;//遮罩里面都是src_roi原数据
+		meanStdDev(StandardDeviationSrcRoi, src_mean, src_sd);
+		
+		//计算汉明距离
+		Mat src_bk_comp = Mat::ones(Size(w0, h0), CV_8UC1);
+		compare(bk_comp, src_comp, src_bk_comp, CMP_EQ);//src_comp和bk_comp的二值图遮罩外面不相等所以都是0，不计入统计
+		src_bk_comp /= 255;
+		int hammingDist = countNonZero(src_bk_comp);
+		double radio = hammingDist / (double)maskArea;
+
+		//计算标准差
+		meanStdDev(src_roi, src_mean, src_sd, binary_roi_mask);
+		double m = src_mean.at<double>(0, 0);
+		double sd = src_sd.at<double>(0, 0);
+	
+		imwrite("src_roi.bmp", src_roi);
+		imwrite("bk_roi.bmp", bk_roi);
+		imwrite("binary_roi_mask.bmp", binary_roi_mask);
+
+
+		if (radio > CLEAR_BIG_THAN_THIS_HAMMING_RADIO || (radio > CLEAR_BIG_THAN_THIS_HAMMING_RADIO  && sd < 20 ) )
+		{
+			rects.erase(rects.begin() + i);
+			i--;
+			rectangle(resultImg, Point(x0, y0), Point(x0 + w0, y0 + h0), Scalar(0, 0, 255), 1, 8); //绘制第i个外接矩形
+			std::stringstream ss;
+			ss <<position<< " hm:" << radio;
+			std::string s = ss.str();
+			putText(resultImg, s.c_str(), Point(x0, y0 + 25), FONT_HERSHEY_PLAIN, 1.0, Scalar(0, 0, 255), 1);
+			std::stringstream sss;
+			sss << "sd:" << sd;
+			std::string s0 = sss.str();
+			putText(resultImg, s0.c_str(), Point(x0, y0 + 45), FONT_HERSHEY_PLAIN, 1.0, Scalar(0, 0, 255), 1);
+		}
+		else
+		{
+			rectangle(resultImg, Point(x0, y0), Point(x0 + w0, y0 + h0), Scalar(255, 0, 0), 1, 8); //绘制第i个外接矩形
+			std::stringstream ss;
+			ss << position << " hm:" << radio;
+			std::string s = ss.str();
+			putText(resultImg, s.c_str(), Point(x0, y0 + 25), FONT_HERSHEY_PLAIN, 1.0, Scalar(255, 0, 0), 1);
+			std::stringstream sss;
+			sss << "sd:" << sd;
+			std::string s0 = sss.str();
+			putText(resultImg, s0.c_str(), Point(x0, y0 + 45), FONT_HERSHEY_PLAIN, 1.0, Scalar(255, 0, 0), 1);
+		}
+
+	}
+}
 void drawRecs(Mat & img, vector<Rect> &rects, const Scalar& color,string &txt)
 {
 	int x0 = 0, y0 = 0, w0 = 0, h0 = 0;
@@ -389,5 +566,66 @@ bool keyEvent(Mat & img, Mat & diff, vector<vector<Point>> &cont, vector<Vec4i> 
 			return true;
 	}
 	return false;
+}
+
+void writeMatToFile(cv::Mat& m, const char* filename)
+{
+	std::ofstream fout(filename);
+
+	if (!fout)
+	{
+		std::cout << "File Not Opened" << std::endl;
+		return;
+	}
+
+	for (int i = 0; i<m.rows; i++)
+	{
+		for (int j = 0; j<m.cols; j++)
+		{
+			int xx = (int)m.at<uchar>(i, j);
+			fout << xx <<",";
+		}
+		fout << std::endl;
+	}
+
+	fout.close();
+}
+
+void svm_hog_detector(vector<Rect> &rects, Mat & src)
+{
+	HOGDescriptor hog = HOGDescriptor();
+	hog.setSVMDetector(hog.getDefaultPeopleDetector());
+	int x0 = 0, y0 = 0, w0 = 0, h0 = 0;
+	for (int i = 0; i< rects.size(); i++)
+	{
+		x0 = rects[i].x;  //获得第i个外接矩形的左上角的x坐标
+		y0 = rects[i].y; //获得第i个外接矩形的左上角的y坐标
+		w0 = rects[i].width; //获得第i个外接矩形的宽度
+		h0 = rects[i].height; //获得第i个外接矩形的高度
+		cv::Mat roi(cv::Size(64 * 2, 128 * 2), CV_8UC1);
+		cv::Mat src_roi = src(cv::Rect(x0, y0, w0, h0)).clone();
+
+		int wid = 64 * 2;
+		int hgt = 128 * 2;
+		resize(src_roi, roi, Size(64*2, 128 * 2));
+		imwrite("test.bmp",roi);
+		HOGDescriptor detector(Size(64, 128), Size(16, 16), Size(8, 8), Size(8, 8), 9);
+		vector<float> descriptor;
+		vector<Point> location;
+		detector.compute(roi, descriptor, Size(0, 0), Size(0, 0), location);
+		//下面是调用opencv中集成的基于HOG的SVM行人检测数据集，进行行人检测
+
+		vector<Rect> peopleLocation;
+		hog.detectMultiScale(roi, peopleLocation, 0, Size(8, 8), Size(16, 16), 1.05, 2.0);
+		for (int i = 0; i < peopleLocation.size(); ++i)
+		{
+			int xx = cvRound(peopleLocation[i].x * w0 / (double)wid);
+			int yy = cvRound(peopleLocation[i].y * h0 / (double)hgt);
+			int ww = cvRound(peopleLocation[i].width * w0 / (double)wid);
+			int hh = cvRound(peopleLocation[i].height * h0 / (double)hgt);
+			rectangle(resultImg, Point(xx + x0, yy + y0),Point(ww, hh), Scalar(0, 255, 0));
+		}
+	}
+
 }
 #endif
