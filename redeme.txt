@@ -1,0 +1,4 @@
+git remote add origin https://github.com/yijiesun/diif_rec.git
+git push -u origin master
+
+mog 提取前景
